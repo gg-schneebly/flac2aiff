@@ -10,24 +10,14 @@ All other files and the directory structure are left untouched.
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from flac2aiff_common import ConversionError, check_ffmpeg, convert, is_flac_path  # noqa: E402
-
-
-def find_flacs(root):
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
-        for name in sorted(filenames):
-            # skip macOS "._" AppleDouble metadata files, which are not real audio
-            if name.startswith("._"):
-                continue
-            path = Path(dirpath) / name
-            if is_flac_path(path):
-                yield path
+from flac2aiff_common import (  # noqa: E402
+    ConversionError, OutOfSpaceError, check_ffmpeg, convert, find_flacs,
+)
+from space_check import check_free_space, require_space  # noqa: E402
 
 
 def main():
@@ -45,14 +35,25 @@ def main():
 
     flacs = list(find_flacs(root))
     print(f"Found {len(flacs)} FLAC file(s) in {root}")
+    min_free = 0
+    if flacs:
+        verdict = check_free_space(flacs, root)
+        require_space(verdict)
+        min_free = verdict.reserve
 
-    failed = []
+    failed, converted, stopped = [], 0, False
     for i, src in enumerate(flacs, 1):
         rel = src.relative_to(root)
         try:
-            dst = convert(src, id3v2_version=args.id3v2_version, dry_run=args.dry_run)
+            dst = convert(src, id3v2_version=args.id3v2_version, dry_run=args.dry_run,
+                          min_free=min_free)
             verb = "would convert" if args.dry_run else "converted"
             print(f"[{i}/{len(flacs)}] {verb}: {rel} -> {dst.name}")
+            converted += 1
+        except OutOfSpaceError as e:
+            print(f"[{i}/{len(flacs)}] STOPPED: {e}", file=sys.stderr)
+            stopped = True
+            break
         except ConversionError as e:
             print(f"[{i}/{len(flacs)}] FAILED: {rel}\n    {e}", file=sys.stderr)
             failed.append(rel)
@@ -61,6 +62,11 @@ def main():
                   file=sys.stderr)
             sys.exit(130)
 
+    if stopped:
+        print(f"\nStopped early because the disk is full: {converted} converted, "
+              f"{len(flacs) - converted - len(failed)} left untouched as FLAC. Free up space and "
+              f"run the same command again to continue.", file=sys.stderr)
+        sys.exit(1)
     print(f"\nDone: {len(flacs) - len(failed)} succeeded, {len(failed)} failed.")
     if failed:
         print("Failed files (originals kept):", file=sys.stderr)

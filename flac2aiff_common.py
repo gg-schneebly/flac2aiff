@@ -26,6 +26,14 @@ class NotFlacError(ConversionError):
     pass
 
 
+class OutOfSpaceError(ConversionError):
+    """The disk is full, or too full to convert the next file safely. The run should stop."""
+
+
+# Tags and cover art that an AIFF carries on top of its PCM audio (largest overhead seen on 239
+# real tracks: 2.4 MiB). Used when deciding whether the next file still fits.
+TAGS_ALLOWANCE = 3 * 1024 ** 2
+
 # bits per sample -> ffmpeg AIFF codec
 PCM_CODECS = {8: "pcm_s8", 16: "pcm_s16be", 24: "pcm_s24be", 32: "pcm_s32be"}
 
@@ -116,10 +124,80 @@ def audio_md5(path):
     return result.stdout.strip()
 
 
-def convert(src, id3v2_version=3, dry_run=False):
+def find_flacs(root, skip_dirs=()):
+    """Yield the paths of all FLAC files below `root`, in sorted order.
+
+    macOS "._" AppleDouble metadata files are skipped because they are not real audio.
+
+    Args:
+        root: Directory to search recursively.
+        skip_dirs: Names of directories to leave out (matched at any depth).
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
+        for name in sorted(filenames):
+            if name.startswith("._"):
+                continue
+            path = Path(dirpath) / name
+            if is_flac_path(path):
+                yield path
+
+
+def pcm_size(info, stream, path):
+    """Return the size in bytes of the decoded audio of a probed file (the AIFF's PCM data).
+
+    Args:
+        info: ffprobe result of the file.
+        stream: Its audio stream.
+        path: The file, for error messages.
+
+    Raises:
+        ConversionError: If the duration cannot be determined.
+    """
+    duration = float(info.get("format", {}).get("duration") or stream.get("duration") or 0)
+    if duration <= 0:
+        raise ConversionError(f"could not determine the duration of {path}")
+    return int(duration * int(stream["sample_rate"]) * int(stream["channels"]) * bit_depth(stream) / 8)
+
+
+def estimate_aiff_size(path):
+    """Estimate the size in bytes of the AIFF that converting the FLAC `path` produces.
+
+    This is the PCM size only; the real file is larger by its tags and cover art.
+
+    Args:
+        path: Path of a FLAC file.
+
+    Raises:
+        ConversionError: If the file cannot be probed or has no usable duration.
+        NotFlacError: If the audio is not FLAC.
+    """
+    info = probe(path)
+    stream = audio_stream(info, path)
+    if stream.get("codec_name") != "flac":
+        raise NotFlacError(f"not a FLAC file (audio codec is '{stream.get('codec_name')}'): {path}")
+    return pcm_size(info, stream, path)
+
+
+def convert(src, id3v2_version=3, dry_run=False, min_free=0):
     """Convert one FLAC file to AIFF next to it, then delete the FLAC.
 
-    Returns the path of the new AIFF file.
+    The FLAC is deleted only after the AIFF is written and verified, so running out of space
+    never costs a file: the half-written AIFF is removed and the FLAC stays.
+
+    Args:
+        src: Path of the FLAC file.
+        id3v2_version: ID3 tag version written into the AIFF (3 or 4).
+        dry_run: Only check the file and return the target path.
+        min_free: Bytes that must stay free after the AIFF is written (a reserve for whatever
+            the caller still has to write afterwards).
+
+    Returns:
+        The path of the new AIFF file.
+
+    Raises:
+        OutOfSpaceError: If the AIFF plus `min_free` does not fit, or the disk fills up.
+        ConversionError: For any other failure; the FLAC is kept.
     """
     src = Path(src)
     if not src.is_file():
@@ -141,6 +219,12 @@ def convert(src, id3v2_version=3, dry_run=False):
     codec = PCM_CODECS[bit_depth(stream)]
     if dry_run:
         return dst
+
+    needed = pcm_size(info, stream, src) + TAGS_ALLOWANCE + min_free
+    free = shutil.disk_usage(src.parent).free
+    if free < needed:
+        raise OutOfSpaceError(f"not enough free space to convert {src.name} safely "
+                              f"({free // 2 ** 20} MiB free, {needed // 2 ** 20} MiB needed)")
 
     tmp = dst.with_name(f".{dst.name}.part")
     has_cover = any(
@@ -167,6 +251,8 @@ def convert(src, id3v2_version=3, dry_run=False):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            if "no space left" in result.stderr.lower():
+                raise OutOfSpaceError(f"the disk filled up while converting {src.name}")
             raise ConversionError(f"ffmpeg failed on {src}: {result.stderr.strip()}")
 
         if audio_md5(src) != audio_md5(tmp):

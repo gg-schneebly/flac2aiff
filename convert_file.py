@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flac2aiff_common import ConversionError, check_ffmpeg, convert  # noqa: E402
+from space_check import check_free_space, require_space  # noqa: E402
 
 
 def main():
@@ -24,8 +25,11 @@ def main():
     args = parser.parse_args()
 
     check_ffmpeg()
+    src = Path(args.file).expanduser()
+    if src.is_file():
+        require_space(check_free_space([src], src.resolve().parent))
     try:
-        dst = convert(Path(args.file).expanduser(), id3v2_version=args.id3v2_version)
+        dst = convert(src, id3v2_version=args.id3v2_version)
     except ConversionError as e:
         sys.exit(f"error: {e}")
     print(f"converted: {args.file} -> {dst}")

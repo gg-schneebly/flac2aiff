@@ -20,27 +20,21 @@ are copied to a timestamped backup folder next to the database.
 import argparse
 import os
 import shutil
-import struct
 import sys
-import unicodedata
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from flac2aiff_common import ConversionError, audio_stream, check_ffmpeg, probe  # noqa: E402
+from flac2aiff_common import ConversionError, check_ffmpeg  # noqa: E402
+from rekordbox_common import (  # noqa: E402
+    ANLZ_SUFFIXES, FILETYPE_AIFF, nfc, patch_anlz_extension, read_aiff_info,
+)
 
 from pyrekordbox import Rekordbox6Database  # noqa: E402
 from pyrekordbox.config import get_config  # noqa: E402
 from pyrekordbox.utils import get_rekordbox_pid  # noqa: E402
 
-FILETYPE_FLAC = 5
-FILETYPE_AIFF = 12
 DB_FILES = ("master.db", "master.db-wal", "master.db-shm", "masterPlaylists6.xml")
-
-
-def nfc(s):
-    # macOS file names and rekordbox paths may encode accents differently (NFD vs NFC)
-    return unicodedata.normalize("NFC", s)
 
 
 def plan_changes(db):
@@ -61,23 +55,17 @@ def plan_changes(db):
             skipped.append((old, "the .aiff already has its own rekordbox entry"))
             continue
         try:
-            stream = audio_stream(probe(new), new)
+            aiff = read_aiff_info(new)
         except ConversionError as e:
             skipped.append((old, str(e)))
             continue
-        if not stream.get("codec_name", "").startswith("pcm_"):
-            skipped.append((old, f"{new} is not an uncompressed AIFF ({stream.get('codec_name')})"))
+        if not aiff.codec.startswith("pcm_"):
+            skipped.append((old, f"{new} is not an uncompressed AIFF ({aiff.codec})"))
             continue
-        rate = int(stream.get("sample_rate") or 0)
-        if c.SampleRate and rate != c.SampleRate:
-            skipped.append((old, f"sample rate differs: rekordbox {c.SampleRate}, aiff {rate}"))
+        if c.SampleRate and aiff.sample_rate != c.SampleRate:
+            skipped.append((old, f"sample rate differs: rekordbox {c.SampleRate}, aiff {aiff.sample_rate}"))
             continue
-        bits = int(stream.get("bits_per_sample") or 0)
-        channels = int(stream.get("channels") or 0)
-        info = {
-            "size": Path(new).stat().st_size,
-            "bitrate": rate * bits * channels // 1000,  # kbps, as rekordbox stores it for AIFF
-        }
+        info = {"size": aiff.size, "bitrate": aiff.bitrate}
         todo.append((c, new, info))
     return todo, skipped
 
@@ -88,37 +76,7 @@ def anlz_files_for(db, content):
     anlz_dir = db.get_anlz_dir(content)
     if not anlz_dir.is_dir():
         return []  # track was never analysed
-    return sorted(p for p in anlz_dir.iterdir() if p.suffix.upper() in (".DAT", ".EXT", ".2EX"))
-
-
-def patch_anlz_extension(data):
-    """Return the ANLZ file bytes with the stored file name's .flac changed to .aiff.
-
-    The file is patched byte-for-byte instead of being re-built with pyrekordbox, because
-    pyrekordbox drops sections it doesn't know (e.g. rekordbox 7's PVB2 waveforms).
-    '.flac' and '.aiff' have the same length, so no section lengths change.
-    Returns None if the file has no PPTH section ending in '.flac'.
-    """
-    if data[:4] != b"PMAI":
-        raise ValueError("not an ANLZ file")
-    i = struct.unpack(">I", data[4:8])[0]
-    while i + 12 <= len(data):
-        tag = data[i:i + 4]
-        len_header, len_tag = struct.unpack(">II", data[i + 4:i + 12])
-        if len_tag <= 0:
-            raise ValueError("corrupt ANLZ section")
-        if tag == b"PPTH":
-            len_path = struct.unpack(">I", data[i + 12:i + 16])[0]
-            start = i + len_header
-            path = data[start:start + len_path].decode("utf-16-be")
-            name = path.rstrip("\0")
-            if not name.lower().endswith(".flac"):
-                return None
-            new = (name[:-5] + ".aiff" + path[len(name):]).encode("utf-16-be")
-            assert len(new) == len_path
-            return data[:start] + new + data[start + len_path:]
-        i += len_tag
-    return None
+    return sorted(p for p in anlz_dir.iterdir() if p.suffix.upper() in ANLZ_SUFFIXES)
 
 
 def backup(db_dir, anlz_paths):
