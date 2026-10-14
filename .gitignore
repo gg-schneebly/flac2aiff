@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+._*
+
+# Never commit music or rekordbox data
+*.flac
+*.FLAC
+*.aiff
+*.aif
+*.mp3
+*.wav
+*.m4a
+*.db
+*.db-wal
+*.db-shm
+flac2aiff-backup-*/
