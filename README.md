@@ -55,6 +55,7 @@ The dependencies are declared in `pyproject.toml`, so `uv sync` also works.
 | Option | Scripts | Meaning |
 |---|---|---|
 | `--dry-run` | `convert_library.py`, `convert_usb.py` | Only list what would be converted. |
+| `--no-eject` | `convert_usb.py` | Leave the stick mounted after a clean run. By default it is unmounted and powered off. |
 | `--backup-dir PATH` | `convert_usb.py` | Where to back up the stick's library files (default `~/flac2aiff-backups/stick-<timestamp>`). |
 | `--id3v2-version {3,4}` | `convert_library.py`, `convert_file.py`, `convert_usb.py` | Tag version written into the AIFF. Default `3`: the most widely supported. `4` keeps full release dates instead of just the year. |
 | `--apply` | `repoint_rekordbox.py` | Actually make the changes. Without it, the script is a dry run. |
@@ -113,7 +114,7 @@ python convert_usb.py /run/media/you/MYSTICK --dry-run   # macOS: /Volumes/MYSTI
 python convert_usb.py /run/media/you/MYSTICK
 ```
 
-Then **eject the stick** before unplugging it.
+After a clean run the script **ejects the stick** (unmounts it and powers it off; `udisksctl` on Linux, `diskutil` on macOS), so you can unplug it right away. Add `--no-eject` to keep it mounted. If anything failed, it stays mounted so you can fix things and run again: eject it yourself before unplugging (Linux: `udiskie-umount -d /run/media/you/MYSTICK` or `udisksctl unmount -b /dev/sdX1`; macOS: `diskutil eject /Volumes/MYSTICK`).
 
 - **Both stick formats are supported**, alone or together: the legacy library (`PIONEER/rekordbox/export.pdb`) read by older players, and Device Library Plus (`exportLibrary.db`). The script finds out which the stick has and updates every one it finds.
 - **What changes per track:**

@@ -2,7 +2,7 @@
 """Convert the FLAC files of a rekordbox USB/SD export to AIFF and keep the export working.
 
 Usage:
-    convert_usb.py STICK [--dry-run] [--id3v2-version {3,4}] [--backup-dir DIR]
+    convert_usb.py STICK [--dry-run] [--no-eject] [--id3v2-version {3,4}] [--backup-dir DIR]
 
 STICK is the mount point of the stick (e.g. /run/media/you/MYSTICK or /Volumes/MYSTICK).
 Works with the legacy library (PIONEER/rekordbox/export.pdb), with Device Library Plus
@@ -16,12 +16,15 @@ deleted again when the run finishes cleanly (no failures, no consistency problem
 FLACs it refers to are gone by then; otherwise it is kept. A --backup-dir is always kept.
 
 If the run is interrupted, run it again: it converts what is left and then repoints
-everything whose FLAC is gone. Eject the stick afterwards before unplugging.
+everything whose FLAC is gone. After a clean run the stick is unmounted and powered off, so it
+can be unplugged right away (--no-eject keeps it mounted). Otherwise it stays mounted.
 """
 
 import argparse
 import os
+import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -48,6 +51,8 @@ def main():
     parser.add_argument("--backup-dir", type=Path,
                         help="where to put the backup and keep it (default: ~/flac2aiff-backups/"
                              "stick-<timestamp>, deleted after a clean run)")
+    parser.add_argument("--no-eject", action="store_true",
+                        help="leave the stick mounted after a clean run (default: unmount and power it off)")
     args = parser.parse_args()
 
     root = args.stick.expanduser().resolve()
@@ -118,10 +123,10 @@ def main():
         print(f"\nSTOPPED EARLY because the stick is full: {converted} converted and their library "
               f"entries updated, {len(flacs) - converted - len(failed)} left untouched as FLAC "
               f"(their entries are unchanged). Free up space and run the same command again to "
-              f"finish. Eject the stick before unplugging it.", file=sys.stderr)
+              f"finish.", file=sys.stderr)
     else:
         print(f"\nDone: {len(flacs) - len(failed)} converted, {len(failed)} failed, "
-              f"{len(problems)} consistency problem(s). Eject the stick before unplugging it.")
+              f"{len(problems)} consistency problem(s).")
     if failed:
         print("Failed files (originals kept):", file=sys.stderr)
         for rel in failed:
@@ -131,7 +136,55 @@ def main():
         print("The run was clean, so the backup of the library files was deleted.")
     elif backup:
         print(f"Kept the backup of the library files: {backup}")
+    if not clean:
+        print("The stick is still mounted. Eject it before unplugging it.", file=sys.stderr)
+    elif args.no_eject:
+        print("The stick is still mounted (--no-eject). Eject it before unplugging it.")
+    else:
+        error = eject(root)
+        if error:
+            print(f"Could not eject the stick ({error}). Eject it yourself before unplugging it.",
+                  file=sys.stderr)
+        else:
+            print("The stick was ejected: you can unplug it now.")
     sys.exit(0 if clean else 1)
+
+
+def eject(root: Path) -> str | None:
+    """Unmount the stick and power it off, so it can be unplugged safely.
+
+    Uses `udisksctl` on Linux (no root needed) and `diskutil` on macOS. Does nothing to a
+    folder that is not itself a mounted device, e.g. a copy of a stick on this computer.
+
+    Args:
+        root: Mount point of the stick.
+
+    Returns:
+        None on success, otherwise why the stick could not be ejected.
+    """
+    if not os.path.ismount(root):
+        return f"{root} is not a mount point"
+    if platform.system() == "Darwin":
+        commands = [["diskutil", "eject", str(root)]]
+    else:
+        source = subprocess.run(["findmnt", "-n", "-o", "SOURCE", "--mountpoint", str(root)],
+                                capture_output=True, text=True)
+        device = source.stdout.strip()
+        if source.returncode != 0 or not device.startswith("/dev/"):
+            return f"no device found for {root}"
+        parent = subprocess.run(["lsblk", "-n", "-d", "-o", "PKNAME", device],
+                                capture_output=True, text=True).stdout.strip()
+        disk = f"/dev/{parent}" if parent else device  # power off the whole drive, not a partition
+        commands = [["udisksctl", "unmount", "-b", device],
+                    ["udisksctl", "power-off", "-b", disk]]
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except FileNotFoundError:
+            return f"{command[0]} is not installed"
+        if result.returncode != 0:
+            return result.stderr.strip() or f"{' '.join(command)} failed"
+    return None
 
 
 def discard_backup(backup: Path | None, clean: bool, requested: bool) -> bool:
