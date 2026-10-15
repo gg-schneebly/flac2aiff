@@ -37,7 +37,7 @@ python convert_usb.py /path/to/stick
 
 Every script has `--help`.
 
-The dependencies are declared in `pyproject.toml`, so with [uv](https://docs.astral.sh/uv/) you can run `uv sync` instead of `pip install` (then activate the environment it creates so `python` finds `pyrekordbox`).
+The dependencies are declared in `pyproject.toml`, so `uv sync` also works.
 
 ## The scripts
 
@@ -161,7 +161,7 @@ Then **eject the stick** before unplugging it.
 
 ### Testing
 
-Run the unit tests (synthetic PDB and ANLZ files) with `uv run pytest`. They don't cover conversion or the libraries of a real stick, so check those by hand:
+Run the unit tests (synthetic PDB and ANLZ files) with `pip install pytest` and then `python -m pytest tests`. They don't cover conversion or the libraries of a real stick, so check those by hand:
 
 - **Conversion:** build a small library with ffmpeg. Include:
   - 16-bit and 24-bit FLACs, with tags and embedded cover art
