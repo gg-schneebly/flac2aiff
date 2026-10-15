@@ -11,7 +11,9 @@ Works with the legacy library (PIONEER/rekordbox/export.pdb), with Device Librar
   * repoints the library rows to the AIFF and moves the track's analysis (ANLZ) files to the
     folder the players compute from the new path, so waveforms, beatgrids and cues keep working
 Cues, beatgrids, playlists etc. are kept. A backup of every library/analysis file that is
-modified is written to ~/flac2aiff-backups/ (not onto the stick) before anything changes.
+modified is written to ~/flac2aiff-backups/ (not onto the stick) before anything changes. It is
+deleted again when the run finishes cleanly (no failures, no consistency problems), because the
+FLACs it refers to are gone by then; otherwise it is kept. A --backup-dir is always kept.
 
 If the run is interrupted, run it again: it converts what is left and then repoints
 everything whose FLAC is gone. Eject the stick afterwards before unplugging.
@@ -19,6 +21,7 @@ everything whose FLAC is gone. Eject the stick afterwards before unplugging.
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -43,7 +46,8 @@ def main():
     parser.add_argument("--id3v2-version", type=int, choices=(3, 4), default=3,
                         help="ID3 tag version written into the AIFF files (default: 3, most compatible)")
     parser.add_argument("--backup-dir", type=Path,
-                        help="where to put the backup (default: ~/flac2aiff-backups/stick-<timestamp>)")
+                        help="where to put the backup and keep it (default: ~/flac2aiff-backups/"
+                             "stick-<timestamp>, deleted after a clean run)")
     args = parser.parse_args()
 
     root = args.stick.expanduser().resolve()
@@ -95,6 +99,7 @@ def main():
     for old, reason in plan.skipped:
         print(f"  SKIPPED {old}\n    {reason}", file=sys.stderr)
     backup_dir = args.backup_dir or default_backup_dir()
+    backup = None
     if plan.count:
         try:
             backup = apply_plan(root, libs, plan, backup_dir)
@@ -121,7 +126,35 @@ def main():
         print("Failed files (originals kept):", file=sys.stderr)
         for rel in failed:
             print(f"  {rel}", file=sys.stderr)
-    sys.exit(1 if stopped or failed or problems else 0)
+    clean = not (stopped or failed or problems)
+    if discard_backup(backup, clean=clean, requested=args.backup_dir is not None):
+        print("The run was clean, so the backup of the library files was deleted.")
+    elif backup:
+        print(f"Kept the backup of the library files: {backup}")
+    sys.exit(0 if clean else 1)
+
+
+def discard_backup(backup: Path | None, clean: bool, requested: bool) -> bool:
+    """Delete the per-run backup after a clean run, unless the user chose where to keep it.
+
+    After a clean run the FLACs the backup refers to are gone, so restoring it would only
+    break the stick; it is useful only while the libraries are being written or when
+    something went wrong.
+
+    Args:
+        backup: The backup folder written by `apply_plan`, or None if nothing was backed up.
+        clean: True if nothing failed, the run was not stopped and the stick check passed.
+        requested: True if the user asked for the backup with --backup-dir.
+
+    Returns:
+        True if the backup was deleted.
+    """
+    if backup is None or not clean or requested:
+        return False
+    shutil.rmtree(backup)
+    if not any(backup.parent.iterdir()):  # ~/flac2aiff-backups held only this backup
+        backup.parent.rmdir()
+    return True
 
 
 if __name__ == "__main__":
