@@ -5,7 +5,7 @@ Convert a music library's FLAC files to AIFF **in place**, losslessly and with t
 - Each `song.flac` becomes `song.aiff` in the same folder. Every other file and the folder structure stay untouched.
 - A FLAC is deleted only after the new AIFF's audio has been checked to be **bit-for-bit identical**.
 - Can also convert a **rekordbox USB/SD stick** in place, so it keeps working in your players (see [Converting a rekordbox USB stick](#converting-a-rekordbox-usb-stick)).
-- Built and tested on macOS with rekordbox 7; the USB stick tool was tested on Linux. The converter should work anywhere ffmpeg and Python 3 run.
+- Built and tested on macOS with rekordbox 7; the USB stick tool was tested on Linux. The converter should work anywhere ffmpeg and Python 3.11+ run.
 
 > ⚠️ This tool deletes the original FLAC files after converting them. **Back up your music library first**, and before running the rekordbox step, make a rekordbox backup too (File → Library → Backup Library).
 
@@ -15,28 +15,29 @@ Convert a music library's FLAC files to AIFF **in place**, losslessly and with t
 # 1. Install ffmpeg (macOS)
 brew install ffmpeg
 
-# 2. Set up Python (3.10+)
+# 2. Set up Python (3.11+) with uv (https://docs.astral.sh/uv/)
 git clone <this repo> flac2aiff && cd flac2aiff
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt   # only needed for the rekordbox step
+uv sync
 
 # 3. Convert (try a dry run first)
-.venv/bin/python convert_library.py ~/Music --dry-run
-.venv/bin/python convert_library.py ~/Music
+uv run convert_library.py ~/Music --dry-run
+uv run convert_library.py ~/Music
 
 # 4. Fix rekordbox (quit rekordbox first; try a dry run first)
-.venv/bin/python repoint_rekordbox.py
-.venv/bin/python repoint_rekordbox.py --apply
+uv run repoint_rekordbox.py
+uv run repoint_rekordbox.py --apply
 ```
 
 **Converting a rekordbox USB/SD stick instead?** Plug it in and run (see [below](#converting-a-rekordbox-usb-stick) for details):
 
 ```sh
-.venv/bin/python convert_usb.py /path/to/stick --dry-run     # e.g. /run/media/you/MYSTICK or /Volumes/MYSTICK
-.venv/bin/python convert_usb.py /path/to/stick
+uv run convert_usb.py /path/to/stick --dry-run     # e.g. /run/media/you/MYSTICK or /Volumes/MYSTICK
+uv run convert_usb.py /path/to/stick
 ```
 
 Every script has `--help`.
+
+Not using uv? The conversion scripts need only Python 3.11+ and ffmpeg. The rekordbox and USB stick tools also need `pip install pyrekordbox==0.5.0`; then run the scripts with `python` instead of `uv run`.
 
 ## The scripts
 
@@ -108,8 +109,8 @@ Rekordbox finds tracks by their exact file path, so after conversion every conve
 ## Converting a rekordbox USB stick
 
 ```sh
-.venv/bin/python convert_usb.py /run/media/you/MYSTICK --dry-run   # macOS: /Volumes/MYSTICK
-.venv/bin/python convert_usb.py /run/media/you/MYSTICK
+uv run convert_usb.py /run/media/you/MYSTICK --dry-run   # macOS: /Volumes/MYSTICK
+uv run convert_usb.py /run/media/you/MYSTICK
 ```
 
 Then **eject the stick** before unplugging it.
@@ -131,7 +132,7 @@ Then **eject the stick** before unplugging it.
 
 - **Comments and lyrics** are stored as custom `TXXX` tag frames instead of `COMM`/`USLT`, because ffmpeg's AIFF tag writer can't write those. Some players won't show them.
 - **Speed:** verification decodes every file twice, so a large library takes a while.
-- **rekordbox's database format isn't public.** `repoint_rekordbox.py` relies on `pyrekordbox` to read and write it. It was tested on macOS with rekordbox 7 and `pyrekordbox` 0.4.4; `requirements.txt` now pins 0.5.0 (needed for Device Library Plus), which that script has not been re-run against on a real library. After a rekordbox update, run the dry run first.
+- **rekordbox's database format isn't public.** `repoint_rekordbox.py` relies on `pyrekordbox` to read and write it. It was tested on macOS with rekordbox 7 and `pyrekordbox` 0.4.4; `pyproject.toml` now pins 0.5.0 (needed for Device Library Plus), which that script has not been re-run against on a real library. After a rekordbox update, run the dry run first.
 - **The legacy `export.pdb` has no public spec from Pioneer.** `rekordbox_pdb.py` follows the community reverse-engineered format (Deep Symmetry's analysis) and only touches the track table.
 
 ## For AI agents and contributors
@@ -160,7 +161,7 @@ Then **eject the stick** before unplugging it.
 
 ### Testing
 
-Run the unit tests (synthetic PDB and ANLZ files) with `.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest tests`. They don't cover conversion or the libraries of a real stick, so check those by hand:
+Run the unit tests (synthetic PDB and ANLZ files) with `uv run pytest`. They don't cover conversion or the libraries of a real stick, so check those by hand:
 
 - **Conversion:** build a small library with ffmpeg. Include:
   - 16-bit and 24-bit FLACs, with tags and embedded cover art

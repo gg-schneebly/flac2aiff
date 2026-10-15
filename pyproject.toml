@@ -1,0 +1,15 @@
+[project]
+name = "flac2aiff"
+version = "0.1.0"
+description = "Convert FLAC to AIFF in place, losslessly, and repoint rekordbox libraries and CDJ USB sticks"
+requires-python = ">=3.11"
+dependencies = [
+    # Exact pin: the tools write rekordbox databases through pyrekordbox, and
+    # only this version has been tested (and is needed for Device Library Plus).
+    "pyrekordbox==0.5.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
