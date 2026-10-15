@@ -15,29 +15,29 @@ Convert a music library's FLAC files to AIFF **in place**, losslessly and with t
 # 1. Install ffmpeg (macOS)
 brew install ffmpeg
 
-# 2. Set up Python (3.11+) with uv (https://docs.astral.sh/uv/)
+# 2. Get the code; you need Python 3.11+
 git clone <this repo> flac2aiff && cd flac2aiff
-uv sync
+pip install pyrekordbox==0.5.0   # only needed for the rekordbox and USB stick tools
 
 # 3. Convert (try a dry run first)
-uv run convert_library.py ~/Music --dry-run
-uv run convert_library.py ~/Music
+python convert_library.py ~/Music --dry-run
+python convert_library.py ~/Music
 
 # 4. Fix rekordbox (quit rekordbox first; try a dry run first)
-uv run repoint_rekordbox.py
-uv run repoint_rekordbox.py --apply
+python repoint_rekordbox.py
+python repoint_rekordbox.py --apply
 ```
 
 **Converting a rekordbox USB/SD stick instead?** Plug it in and run (see [below](#converting-a-rekordbox-usb-stick) for details):
 
 ```sh
-uv run convert_usb.py /path/to/stick --dry-run     # e.g. /run/media/you/MYSTICK or /Volumes/MYSTICK
-uv run convert_usb.py /path/to/stick
+python convert_usb.py /path/to/stick --dry-run     # e.g. /run/media/you/MYSTICK or /Volumes/MYSTICK
+python convert_usb.py /path/to/stick
 ```
 
 Every script has `--help`.
 
-Not using uv? The conversion scripts need only Python 3.11+ and ffmpeg. The rekordbox and USB stick tools also need `pip install pyrekordbox==0.5.0`; then run the scripts with `python` instead of `uv run`.
+The dependencies are declared in `pyproject.toml`, so with [uv](https://docs.astral.sh/uv/) you can run `uv sync` instead of `pip install` (then activate the environment it creates so `python` finds `pyrekordbox`).
 
 ## The scripts
 
@@ -109,8 +109,8 @@ Rekordbox finds tracks by their exact file path, so after conversion every conve
 ## Converting a rekordbox USB stick
 
 ```sh
-uv run convert_usb.py /run/media/you/MYSTICK --dry-run   # macOS: /Volumes/MYSTICK
-uv run convert_usb.py /run/media/you/MYSTICK
+python convert_usb.py /run/media/you/MYSTICK --dry-run   # macOS: /Volumes/MYSTICK
+python convert_usb.py /run/media/you/MYSTICK
 ```
 
 Then **eject the stick** before unplugging it.
