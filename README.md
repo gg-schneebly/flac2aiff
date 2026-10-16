@@ -17,7 +17,7 @@ brew install ffmpeg
 
 # 2. Get the code; you need Python 3.11+
 git clone <this repo> flac2aiff && cd flac2aiff
-pip install pyrekordbox==0.5.0   # only needed for the rekordbox and USB stick tools
+pip install pyrekordbox==0.5.0 cryptography   # only needed for the rekordbox and USB stick tools
 
 # 3. Convert (try a dry run first)
 python convert_library.py ~/Music --dry-run
@@ -47,6 +47,7 @@ The dependencies are declared in `pyproject.toml`, so `uv sync` also works.
 | `convert_file.py FILE` | Converts one file. Exits with an error if `FILE` isn't a FLAC. | ffmpeg |
 | `repoint_rekordbox.py` | Points rekordbox tracks at the AIFF files that replaced their FLACs. | ffmpeg, `pyrekordbox` |
 | `convert_usb.py STICK` | Converts a rekordbox USB/SD stick and repoints its libraries, in one step. | ffmpeg, `pyrekordbox` |
+| `repair_dlp.py STICK` | Salvages a damaged Device Library Plus database (`exportLibrary.db`) on a stick, so `convert_usb.py` can read it. | `pyrekordbox`, `cryptography` |
 | `flac2aiff_common.py` | Shared conversion code used by the scripts above. Not run directly. | |
 | `rekordbox_common.py`, `rekordbox_pdb.py`, `rekordbox_usb.py` | Shared rekordbox code (analysis files, legacy `export.pdb` reader/patcher, stick logic). Not run directly. | |
 
@@ -128,6 +129,21 @@ After a clean run the script **ejects the stick** (unmounts it and powers it off
 - **Space:** AIFF is bigger than FLAC (roughly 1.5×). The script estimates the growth first, refuses to start if the stick is too full and warns if it would get tight (see above). The stick must be FAT32/exFAT as usual for players; a single AIFF can't exceed 4 GiB on FAT32.
 - **Checks at the end:** the script verifies that every library row points to a file on the stick with the right size, that both libraries list the same tracks, that every analysis folder is the one the players compute for that track's path, and that the analysis files exist and name the right track.
 - **Also converted:** any FLAC on the stick outside `PIONEER*`, even if it isn't in the library.
+- **Damaged library:** both libraries are read before anything is converted. If one can't be read, the script stops and changes nothing. A damaged `exportLibrary.db` can often be salvaged with `repair_dlp.py` (next section).
+
+## Repairing a damaged exportLibrary.db
+
+`exportLibrary.db` is encrypted page by page (SQLCipher), and each 4 KB page carries a checksum. If part of a page was never written to the stick (it reads back as zeros, e.g. after the stick was pulled before the export finished writing), the whole track table becomes unreadable: `convert_usb.py` then reports it as damaged.
+
+```sh
+python repair_dlp.py /run/media/you/MYSTICK --dry-run
+python repair_dlp.py /run/media/you/MYSTICK
+```
+
+- It decrypts the damaged page, keeps every row that lies entirely in its undamaged part, rebuilds the page from them and encrypts it again. All other pages stay as they are.
+- Rows that could not be recovered are listed, and entries in other tables that point at them (playlist entries) are removed, so the library stays consistent. It also lists the tracks that the legacy library still has but Device Library Plus no longer does: newer players won't show those, older ones (which read `export.pdb`) still do. Re-export from rekordbox to get them back in Device Library Plus.
+- It only repairs damage it can locate (zeroed blocks on pages of a table). Anything else stops with an error and leaves the stick unchanged.
+- The original file is copied to `~/flac2aiff-backups/repair-<timestamp>/` first and kept (`--backup-dir` to choose).
 
 ## Known limitations
 
@@ -147,6 +163,7 @@ After a clean run the script **ejects the stick** (unmounts it and powers it off
 - `convert_usb.py`: converts a stick, then repoints its libraries and moves its analysis files via `rekordbox_usb.py` (`plan_repoints` → `apply_plan` → `check_stick`).
 - `rekordbox_common.py`: ANLZ path patching, the analysis-folder path hash and file-type constants shared by both repoint scripts.
 - `rekordbox_pdb.py`: reader/patcher for the track table of a legacy `export.pdb`.
+- `repair_dlp.py`: page-level salvage of a damaged `exportLibrary.db` (own SQLCipher 4 page decryption/encryption with the `cryptography` package, b-tree leaf rebuild, then SQL cleanup and integrity checks through `sqlcipher3`).
 
 ### Rules that must not be broken
 

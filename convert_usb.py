@@ -33,7 +33,8 @@ from flac2aiff_common import (  # noqa: E402
     ConversionError, OutOfSpaceError, check_ffmpeg, convert, find_flacs,
 )
 from rekordbox_usb import (  # noqa: E402
-    apply_plan, check_stick, default_backup_dir, find_libraries, plan_repoints,
+    LibraryReadError, apply_plan, check_stick, default_backup_dir, find_libraries,
+    plan_repoints,
 )
 from space_check import check_free_space, finalization_reserve, require_space  # noqa: E402
 
@@ -71,8 +72,12 @@ def main():
     verdict = check_free_space(flacs, root, reserve=finalization_reserve(len(flacs)))
     require_space(verdict)
 
-    if args.dry_run:
+    try:  # read the libraries before converting anything: a damaged one stops the run here
         plan = plan_repoints(root, libs)
+    except LibraryReadError as e:
+        sys.exit(f"error: {e}. Nothing was changed.")
+
+    if args.dry_run:
         print(f"{plan.count} track(s) already converted and waiting to be repointed in the libraries")
         for f in flacs[:20]:
             print(f"  would convert: {f.relative_to(root)}")

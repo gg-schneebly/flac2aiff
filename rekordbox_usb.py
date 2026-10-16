@@ -27,11 +27,15 @@ from rekordbox_common import (
     ANLZ_SUFFIXES, FILETYPE_AIFF, AiffInfo, anlz_folder, anlz_stored_path,
     patch_anlz_extension, read_aiff_info,
 )
-from rekordbox_pdb import PdbFile
+from rekordbox_pdb import PdbError, PdbFile
 
 RB_DIR = Path("PIONEER") / "rekordbox"
 PDB_NAME = "export.pdb"
 DLP_NAME = "exportLibrary.db"
+
+
+class LibraryReadError(Exception):
+    """A library on the stick cannot be read (e.g. a damaged exportLibrary.db)."""
 
 
 @dataclass
@@ -116,16 +120,28 @@ def open_dlp(path: Path):
 
 
 def _read_libraries(libs: Libraries):
-    """Return {format: [(path, analyze_path)]} for the FLAC tracks of each library."""
+    """Return {format: [(path, analyze_path)]} for the FLAC tracks of each library.
+
+    Raises:
+        LibraryReadError: A library is damaged.
+    """
+    from sqlalchemy.exc import DatabaseError
     tracks = {"pdb": [], "dlp": []}
     if libs.pdb:
-        tracks["pdb"] = [(t.file_path, t.analyze_path) for t in PdbFile(libs.pdb).tracks()]
+        try:
+            tracks["pdb"] = [(t.file_path, t.analyze_path) for t in PdbFile(libs.pdb).tracks()]
+        except PdbError as e:
+            raise LibraryReadError(f"{libs.pdb.name} cannot be read: {e}") from e
     if libs.dlp:
         from pyrekordbox.onelibrary import models
-        with warnings.catch_warnings(), open_dlp(libs.dlp) as db:
-            warnings.simplefilter("ignore")
-            tracks["dlp"] = [(c.path, c.analysisDataFilePath or "")
-                             for c in db.query(models.Content).all()]
+        try:
+            with warnings.catch_warnings(), open_dlp(libs.dlp) as db:
+                warnings.simplefilter("ignore")
+                tracks["dlp"] = [(c.path, c.analysisDataFilePath or "")
+                                 for c in db.query(models.Content).all()]
+        except DatabaseError as e:
+            raise LibraryReadError(f"{libs.dlp.name} is damaged ({e.orig}); try "
+                                   f"repair_dlp.py on the stick") from e
     return {k: [(p, a) for p, a in v if p.lower().endswith(".flac")] for k, v in tracks.items()}
 
 
@@ -138,6 +154,9 @@ def plan_repoints(root: Path, libs: Libraries) -> Plan:
     Args:
         root: Mount point of the stick.
         libs: Libraries found on the stick.
+
+    Raises:
+        LibraryReadError: A library is damaged.
     """
     plan = Plan()
     cache, skipped = {}, set()
