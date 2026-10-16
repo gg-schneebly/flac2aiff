@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flac2aiff_common import (  # noqa: E402
-    ConversionError, OutOfSpaceError, check_ffmpeg, convert, find_flacs,
+    ConversionError, OutOfSpaceError, audio_md5, check_ffmpeg, convert, find_flacs,
 )
 from rekordbox_usb import (  # noqa: E402
     LibraryReadError, apply_plan, check_stick, default_backup_dir, find_libraries,
@@ -89,6 +89,11 @@ def main():
     try:
         for i, src in enumerate(flacs, 1):
             try:
+                if remove_duplicate(src):
+                    print(f"[{i}/{len(flacs)}] already converted: {src.relative_to(root)} "
+                          f"(the AIFF next to it has the same audio; FLAC removed)")
+                    converted += 1
+                    continue
                 dst = convert(src, id3v2_version=args.id3v2_version, min_free=verdict.reserve)
                 print(f"[{i}/{len(flacs)}] converted: {src.relative_to(root)} -> {dst.name}")
                 converted += 1
@@ -153,6 +158,27 @@ def main():
         else:
             print("The stick was ejected: you can unplug it now.")
     sys.exit(0 if clean else 1)
+
+
+def remove_duplicate(src: Path) -> bool:
+    """Delete a FLAC whose AIFF already exists next to it with bit-identical audio.
+
+    rekordbox exports the FLAC and the AIFF of the same track side by side when the collection
+    holds both. The library entries of such a FLAC are then repointed to that AIFF like those of
+    any converted track.
+
+    Args:
+        src: The FLAC file.
+
+    Returns:
+        True if the FLAC was a duplicate and was deleted. False if there is no such AIFF; if the
+        AIFF holds different audio it is left for `convert`, which refuses to overwrite it.
+    """
+    dst = src.with_suffix(".aiff")
+    if not dst.is_file() or audio_md5(src) != audio_md5(dst):
+        return False
+    src.unlink()
+    return True
 
 
 def eject(root: Path) -> str | None:

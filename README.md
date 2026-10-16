@@ -129,6 +129,7 @@ After a clean run the script **ejects the stick** (unmounts it and powers it off
 - **Space:** AIFF is bigger than FLAC (roughly 1.5×). The script estimates the growth first, refuses to start if the stick is too full and warns if it would get tight (see above). The stick must be FAT32/exFAT as usual for players; a single AIFF can't exceed 4 GiB on FAT32.
 - **Checks at the end:** the script verifies that every library row points to a file on the stick with the right size, that both libraries list the same tracks, that every analysis folder is the one the players compute for that track's path, and that the analysis files exist and name the right track.
 - **Also converted:** any FLAC on the stick outside `PIONEER*`, even if it isn't in the library.
+- **FLAC and AIFF of the same track on one stick** (rekordbox exports both when the collection holds both): if the AIFF next to a FLAC has bit-identical audio, the FLAC is deleted instead of converted and its library entries are repointed to that AIFF. Their analysis files are shared with the AIFF's entry if identical, otherwise kept as a separate `ANLZ0001` set, so cues and beatgrids of either entry are never overwritten. If the audio differs, the FLAC is reported as failed and left alone.
 - **Damaged library:** both libraries are read before anything is converted. If one can't be read, the script stops and changes nothing. A damaged `exportLibrary.db` can often be salvaged with `repair_dlp.py` (next section).
 
 ## Repairing a damaged exportLibrary.db

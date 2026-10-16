@@ -76,11 +76,14 @@ class Plan:
         pdb: Repoints for the legacy library (empty if the stick has none).
         dlp: Repoints for Device Library Plus (empty if the stick has none).
         skipped: (path, reason) for FLAC tracks that cannot be repointed.
+        claimed: Analysis pointers (upper case) of every library row, so the analysis files of
+            one row are never handed to another.
     """
 
     pdb: list[Repoint] = field(default_factory=list)
     dlp: list[Repoint] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    claimed: set[str] = field(default_factory=set)
 
     @property
     def count(self) -> int:
@@ -120,7 +123,7 @@ def open_dlp(path: Path):
 
 
 def _read_libraries(libs: Libraries):
-    """Return {format: [(path, analyze_path)]} for the FLAC tracks of each library.
+    """Return {format: [(path, analyze_path)]} for all tracks of each library.
 
     Raises:
         LibraryReadError: A library is damaged.
@@ -142,7 +145,7 @@ def _read_libraries(libs: Libraries):
         except DatabaseError as e:
             raise LibraryReadError(f"{libs.dlp.name} is damaged ({e.orig}); try "
                                    f"repair_dlp.py on the stick") from e
-    return {k: [(p, a) for p, a in v if p.lower().endswith(".flac")] for k, v in tracks.items()}
+    return tracks
 
 
 def plan_repoints(root: Path, libs: Libraries) -> Plan:
@@ -161,8 +164,9 @@ def plan_repoints(root: Path, libs: Libraries) -> Plan:
     plan = Plan()
     cache, skipped = {}, set()
     for kind, tracks in _read_libraries(libs).items():
+        plan.claimed |= {anlz.upper() for _, anlz in tracks if anlz}
         for old, anlz in tracks:
-            if stick_file(root, old).exists():
+            if not old.lower().endswith(".flac") or stick_file(root, old).exists():
                 continue  # FLAC still there: not converted (yet)
             new = old[:-len(".flac")] + ".aiff"
             aiff = stick_file(root, new)
@@ -208,47 +212,74 @@ class AnlzMove:
     """Where one track's analysis files go.
 
     Attributes:
-        files: {source file: (target file, patched contents)}.
+        files: {source file: (target file, patched contents)}; empty when identical files
+            are already in place.
         pointer: New library string for the track's `.DAT` file.
+        sources: The track's current analysis files, deleted once the libraries are updated.
     """
 
     files: dict[Path, tuple[Path, bytes]]
     pointer: str
+    sources: list[Path]
 
 
-def _pick_stem(folder: Path, track_path: str, reserved: set[str]) -> str:
+def _existing_stems(folder: Path) -> dict[str, dict[str, bytes]]:
+    """Return {stem: {suffix (upper case): contents}} of the analysis files in a folder."""
+    stems = defaultdict(dict)
+    if folder.is_dir():
+        for p in folder.iterdir():
+            if p.suffix.upper() in ANLZ_SUFFIXES and not p.name.startswith("._"):
+                stems[p.stem][p.suffix.upper()] = p.read_bytes()
+    return stems
+
+
+def _pick_stem(folder: Path, track_path: str, reserved: set[str], claimed: set[str],
+               contents: dict[str, bytes]) -> tuple[str, bool]:
     """Choose the file-name stem (`ANLZ0000`, `ANLZ0001`, ...) for a track in its folder.
 
-    A stem whose `.DAT` already names this track is reused (e.g. a partial analysis a player
-    wrote earlier). Otherwise the lowest stem that is not used by another track.
+    1. A stem whose files already hold exactly `contents` is shared: the AIFF of the same track
+       is in the library too, with the same analysis (rekordbox shares files the same way).
+    2. A stem whose `.DAT` names this track but that no library row points at is replaced
+       (e.g. a partial analysis a player wrote earlier).
+    3. Otherwise the lowest free stem, so the analysis of another row is never overwritten.
 
     Args:
         folder: The track's hashed analysis folder (may not exist yet).
         track_path: Track path as stored in the library.
         reserved: Stems already handed out in this folder during this run.
+        claimed: Analysis pointers (upper case) of every library row.
+        contents: The track's patched analysis files, {suffix (upper case): contents}.
+
+    Returns:
+        (stem, True if identical files are already there and nothing needs writing).
     """
+    stems = _existing_stems(folder)
+    for stem in sorted(stems):
+        if stems[stem] == contents:
+            return stem, True
     taken = set(reserved)
-    if folder.is_dir():
-        for p in folder.iterdir():
-            if p.suffix.upper() not in ANLZ_SUFFIXES or p.name.startswith("._"):
-                continue
-            if p.suffix.upper() == ".DAT" and anlz_stored_path(p.read_bytes()) == track_path:
-                return p.stem
-            taken.add(p.stem)
+    for stem, files in sorted(stems.items()):
+        pointer = f"{anlz_folder(track_path)}/{stem}.DAT".upper()
+        dat = files.get(".DAT")
+        if (stem not in reserved and pointer not in claimed and dat is not None
+                and anlz_stored_path(dat) == track_path):
+            return stem, False
+        taken.add(stem)
     index = 0
     while f"ANLZ{index:04d}" in taken:
         index += 1
-    return f"ANLZ{index:04d}"
+    return f"ANLZ{index:04d}", False
 
 
-def plan_anlz_move(root: Path, repoints: list[Repoint],
-                   reserved: dict[Path, set[str]]) -> AnlzMove | None:
+def plan_anlz_move(root: Path, repoints: list[Repoint], reserved: dict[Path, set[str]],
+                   claimed: set[str]) -> AnlzMove | None:
     """Work out the new location and contents of one track's analysis files.
 
     Args:
         root: Mount point of the stick.
         repoints: The track's entries from the libraries (they share old and new path).
         reserved: Stems already used per folder in this run; updated here.
+        claimed: Analysis pointers (upper case) of every library row.
 
     Returns:
         The move, or None if the track has no analysis files to move.
@@ -264,13 +295,15 @@ def plan_anlz_move(root: Path, repoints: list[Repoint],
     if not patched:
         return None
     folder = stick_file(root, anlz_folder(new_path))
-    stem = _pick_stem(folder, new_path, reserved.setdefault(folder, set()))
+    contents = {src.suffix.upper(): data for src, data in patched.items()}
+    stem, shared = _pick_stem(folder, new_path, reserved.setdefault(folder, set()), claimed,
+                              contents)
     reserved[folder].add(stem)
     suffix = Path(repoints[0].anlz_path).suffix or ".DAT"
-    return AnlzMove(
-        files={src: (folder / f"{stem}{src.suffix}", data) for src, data in patched.items()},
-        pointer=f"{anlz_folder(new_path)}/{stem}{suffix}",
-    )
+    files = {} if shared else {src: (folder / f"{stem}{src.suffix}", data)
+                               for src, data in patched.items()}
+    return AnlzMove(files=files, pointer=f"{anlz_folder(new_path)}/{stem}{suffix}",
+                    sources=list(patched))
 
 
 def backup_files(root: Path, libs: Libraries, files: list[Path], dest: Path) -> Path:
@@ -324,8 +357,8 @@ def apply_plan(root: Path, libs: Libraries, plan: Plan, backup_dir: Path) -> Pat
         by_track[repoint.old_path].append(repoint)
     reserved: dict[Path, set[str]] = {}
     moves = {old: move for old, rs in by_track.items()
-             if (move := plan_anlz_move(root, rs, reserved))}
-    sources = [src for m in moves.values() for src in m.files]
+             if (move := plan_anlz_move(root, rs, reserved, plan.claimed))}
+    sources = [src for m in moves.values() for src in m.sources]
     targets = [dst for m in moves.values() for dst, _ in m.files.values()]
 
     backup = backup_files(root, libs, sources + [t for t in targets if t.exists()], backup_dir)
